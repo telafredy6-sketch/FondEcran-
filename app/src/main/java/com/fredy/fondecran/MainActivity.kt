@@ -2,12 +2,8 @@ package com.fredy.fondecran
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.KeyguardManager
-import android.app.WallpaperManager
 import android.content.ActivityNotFoundException
-import android.content.ComponentName
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -34,58 +30,60 @@ class MainActivity : Activity() {
     private val match = ViewGroup.LayoutParams.MATCH_PARENT
     private val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
 
+    // Palette de couleurs exacte correspondant au thème TypeScript
     private val bgColor = Color.parseColor("#E3F2FD")
+    private val topBarColor = Color.parseColor("#BBDEFB")
     private val mainBlue = Color.parseColor("#1E88E5")
     private val darkBlue = Color.parseColor("#0D47A1")
+    private val subtitleBlue = Color.parseColor("#1565C0")
+    private val cardBorderColor = Color.parseColor("#DBEAFE")
 
-    // Navigation Pages
     private enum class Page {
         HOME,
         PROJECT_EDIT,
-        IMAGE_EDITOR,
-        AUDIO_EDITOR,
+        PINTEREST_FEED,
         SYSTEM_SOUNDS,
         SETTINGS
     }
 
     private var currentPage = Page.HOME
     private var activeProject: SlideshowProject? = null
-    private var editingSlide: SlideItem? = null
-    private var tempMediaPlayer: MediaPlayer? = null
+    private var editingSlideForMusic: SlideItem? = null
 
     private lateinit var rootContainer: FrameLayout
+    private lateinit var contentContainer: LinearLayout
+    private lateinit var bottomNav: LinearLayout
+
+    private var pinterestCategory = "all"
+    private var systemSoundsCategory = "all"
+    private var tempSystemSoundPlayer: MediaPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.parseColor("#BBDEFB")
+        window.statusBarColor = topBarColor
 
         rootContainer = FrameLayout(this)
         setContentView(rootContainer)
 
-        // Authentification par empreinte ou code si configuré
-        val pinEnabled = Slides.prefs(this).getBoolean("security_pin_enabled", false)
-        if (pinEnabled) {
-            val km = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
-            val intent = if (km.isDeviceSecure) {
-                km.createConfirmDeviceCredentialIntent(
-                    "Fond d'écran", "Confirme ton identité pour ouvrir l'app"
-                )
-            } else null
+        // Charger les projets persistants
+        val projects = Slides.loadProjects(this)
+        activeProject = Slides.getActiveProject(this)
 
-            if (intent != null) {
-                startActivityForResult(intent, reqAuth)
-                return
-            }
+        // Sécurité au démarrage si configurée
+        val config = Slides.loadAppConfig(this)
+        if (config.securityPinEnabled) {
+            SecurityGateDialog(this, config.securityPin) {
+                setupMainInterface()
+            }.show()
+        } else {
+            setupMainInterface()
         }
-
-        navigateTo(Page.HOME)
     }
 
-    private fun navigateTo(page: Page) {
-        currentPage = page
+    private fun setupMainInterface() {
         rootContainer.removeAllViews()
 
-        // Appliquer le fond personnalisé si défini par l'utilisateur
+        // 1. Fond d'écran personnalisé de l'application
         val bgView = View(this).apply {
             setBackgroundColor(bgColor)
             layoutParams = ViewGroup.LayoutParams(match, match)
@@ -93,308 +91,744 @@ class MainActivity : Activity() {
         Slides.applyAppWallpaper(bgView, this)
         rootContainer.addView(bgView)
 
-        val pageView = when (page) {
-            Page.HOME -> buildHomePage()
-            Page.PROJECT_EDIT -> buildProjectEditPage()
-            Page.IMAGE_EDITOR -> buildImageEditorPage()
-            Page.AUDIO_EDITOR -> buildAudioEditorPage()
-            Page.SYSTEM_SOUNDS -> buildSystemSoundsPage()
-            Page.SETTINGS -> buildSettingsPage()
-        }
-
-        val scroll = ScrollView(this).apply {
-            layoutParams = ViewGroup.LayoutParams(match, match)
-            addView(pageView)
-        }
-        rootContainer.addView(scroll)
-    }
-
-    override fun onBackPressed() {
-        if (currentPage != Page.HOME) {
-            navigateTo(Page.HOME)
-        } else {
-            super.onBackPressed()
-        }
-    }
-
-    // ==========================================
-    // 1. PAGE ACCUEIL / LISTE DES DIAPORAMAS
-    // ==========================================
-
-    private fun buildHomePage(): View {
-        val pad = dp(16)
-        val col = LinearLayout(this).apply {
+        val mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad * 2)
+            layoutParams = ViewGroup.LayoutParams(match, match)
         }
 
-        // Header
-        col.addView(label("Fond d'écran Studio", 26f, darkBlue))
-        col.addView(label("Gère tes diaporamas et fonds d'écran avec musique", 13f, Color.parseColor("#1565C0")))
-
-        // Bouton Nouveau Projet
-        val btnNew = button("+ Nouveau Diaporama / Fond") {
-            showNewProjectDialog()
-        }
-        col.addView(btnNew)
-
-        // Accès rapides
-        val rowShortcuts = LinearLayout(this).apply {
+        // 2. En-tête de l'application (Header Bar)
+        val appBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(4), 0, dp(12)) }
-        }
-        rowShortcuts.addView(smallTextButton("🎵 Sons Système") { navigateTo(Page.SYSTEM_SOUNDS) })
-        rowShortcuts.addView(smallTextButton("⚙️ Paramètres") { navigateTo(Page.SETTINGS) })
-        col.addView(rowShortcuts)
-
-        // Liste des projets
-        val projects = Slides.loadProjects(this)
-        col.addView(label("Mes Projets (${projects.size})", 18f, darkBlue))
-
-        for (proj in projects) {
-            col.addView(buildProjectCard(proj))
-        }
-
-        // Section Pinterest
-        col.addView(label("Découverte Pinterest", 18f, darkBlue))
-        val search = EditText(this).apply {
-            hint = "Ex : nature, océan, anime"
-            setSingleLine(true)
-            setTextColor(darkBlue)
-            setHintTextColor(Color.parseColor("#7A9CC6"))
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
-                setColor(Color.WHITE)
+                setColor(Color.parseColor("#F0BBDEFB"))
+            }
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            layoutParams = LinearLayout.LayoutParams(match, wrap)
+        }
+
+        // Bouton Retour si on n'est pas sur Accueil
+        if (currentPage != Page.HOME) {
+            val backBtn = Button(this).apply {
+                text = "←"
+                textSize = 18f
+                setTextColor(darkBlue)
+                setBackgroundColor(Color.TRANSPARENT)
+                minWidth = 0; minimumWidth = 0; setPadding(0, 0, dp(8), 0)
+                setOnClickListener {
+                    currentPage = Page.HOME
+                    setupBottomNav()
+                    renderCurrentPage()
+                }
+            }
+            appBar.addView(backBtn)
+        }
+
+        // Logo Icon avec dégradé bleu
+        val logoIcon = TextView(this).apply {
+            text = "FE"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { setMargins(0, 0, dp(10), 0) }
+            background = GradientDrawable().apply {
+                colors = intArrayOf(darkBlue, mainBlue)
+                orientation = GradientDrawable.Orientation.TL_BR
+                cornerRadius = dp(11).toFloat()
+            }
+        }
+        appBar.addView(logoIcon)
+
+        // Titre et badge Studio
+        val titleBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f)
+        }
+        titleBox.addView(TextView(this).apply {
+            text = "Fond d'écran"
+            textSize = 17f
+            setTextColor(darkBlue)
+        })
+        titleBox.addView(TextView(this).apply {
+            text = "Studio"
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(dp(6), 0, 0, 0) }
+            background = GradientDrawable().apply {
+                setColor(mainBlue)
+                cornerRadius = dp(6).toFloat()
+            }
+        })
+        appBar.addView(titleBox)
+
+        // Bouton Aperçu Téléphone
+        val btnLivePreview = Button(this).apply {
+            text = "📱 Aperçu Téléphone"
+            setAllCaps(false)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(mainBlue)
                 cornerRadius = dp(12).toFloat()
             }
-            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(6), 0, dp(6)) }
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setOnClickListener {
+                val proj = activeProject ?: return@setOnClickListener
+                LiveWallpaperPreviewDialog(this@MainActivity, proj).show()
+            }
         }
-        col.addView(search)
-        col.addView(button("Chercher sur Pinterest") { openPinterest(search.text.toString()) })
+        appBar.addView(btnLivePreview)
+        mainLayout.addView(appBar)
 
-        return col
+        // 3. Contenu Défilant
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
+        }
+        contentContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(24))
+        }
+        scroll.addView(contentContainer)
+        mainLayout.addView(scroll)
+
+        // 4. Barre de Navigation Inférieure (Bottom Nav)
+        bottomNav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+            }
+            elevation = dp(8).toFloat()
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(match, wrap)
+        }
+        setupBottomNav()
+        mainLayout.addView(bottomNav)
+
+        rootContainer.addView(mainLayout)
+        renderCurrentPage()
+    }
+
+    private fun setupBottomNav() {
+        bottomNav.removeAllViews()
+        val navItems = listOf(
+            Triple(Page.HOME, "Accueil", "🏠"),
+            Triple(Page.PROJECT_EDIT, "Édition", "🎛️"),
+            Triple(Page.PINTEREST_FEED, "Pinterest", "✨"),
+            Triple(Page.SYSTEM_SOUNDS, "Sons", "🔔"),
+            Triple(Page.SETTINGS, "Réglages", "⚙️")
+        )
+
+        navItems.forEach { (page, label, icon) ->
+            val isCurrent = currentPage == page
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, wrap, 1f)
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                setOnClickListener {
+                    currentPage = page
+                    setupMainInterface()
+                }
+            }
+
+            item.addView(TextView(this).apply {
+                text = icon
+                textSize = 18f
+                gravity = Gravity.CENTER
+            })
+
+            item.addView(TextView(this).apply {
+                text = label
+                textSize = 10f
+                setTextColor(if (isCurrent) mainBlue else Color.GRAY)
+                gravity = Gravity.CENTER
+            })
+
+            bottomNav.addView(item)
+        }
+    }
+
+    private fun renderCurrentPage() {
+        contentContainer.removeAllViews()
+        when (currentPage) {
+            Page.HOME -> renderHomePage()
+            Page.PROJECT_EDIT -> renderProjectEditPage()
+            Page.PINTEREST_FEED -> renderPinterestFeedPage()
+            Page.SYSTEM_SOUNDS -> renderSystemSoundsPage()
+            Page.SETTINGS -> renderSettingsPage()
+        }
+    }
+
+    // ==========================================
+    // 1. PAGE ACCUEIL (Identique HomePage.tsx)
+    // ==========================================
+
+    private fun renderHomePage() {
+        // Hero Welcome Banner
+        val hero = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                colors = intArrayOf(mainBlue, darkBlue)
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                cornerRadius = dp(24).toFloat()
+            }
+            setPadding(dp(22), dp(22), dp(22), dp(22))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(18)) }
+        }
+
+        // Pill
+        val pill = TextView(this).apply {
+            text = "✨ Créateur Pro de Fonds d'Écran & Diaporamas"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#33FFFFFF"))
+                cornerRadius = dp(14).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(0, 0, 0, dp(8)) }
+        }
+        hero.addView(pill)
+
+        hero.addView(TextView(this).apply {
+            text = "Fond d'écran Studio"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+        })
+
+        hero.addView(TextView(this).apply {
+            text = "Crée des diaporamas animés avec musiques découpées sur-mesure, durées par image personnalisées et prévisualisation smartphone en direct."
+            textSize = 12f
+            setTextColor(Color.parseColor("#E0F2FE"))
+            setPadding(0, dp(4), 0, dp(14))
+        })
+
+        val btnNew = Button(this).apply {
+            text = "+ Nouveau Projet"
+            setAllCaps(false)
+            textSize = 14f
+            setTextColor(darkBlue)
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(16).toFloat()
+            }
+            setOnClickListener { showNewProjectDialog() }
+        }
+        hero.addView(btnNew)
+        contentContainer.addView(hero)
+
+        // En-tête section Projets
+        val projHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(10)) }
+        }
+        val projects = Slides.loadProjects(this)
+        val projTitle = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f)
+        }
+        projTitle.addView(TextView(this).apply {
+            text = "Mes Diaporamas & Fonds"
+            textSize = 18f
+            setTextColor(darkBlue)
+        })
+        projTitle.addView(TextView(this).apply {
+            text = "${projects.size} projet(s) sauvegardé(s)"
+            textSize = 12f
+            setTextColor(mainBlue)
+        })
+        projHeader.addView(projTitle)
+
+        val btnPinterestLink = Button(this).apply {
+            text = "Explorer Pinterest →"
+            setAllCaps(false)
+            textSize = 12f
+            setTextColor(mainBlue)
+            setBackgroundColor(Color.TRANSPARENT)
+            setOnClickListener {
+                currentPage = Page.PINTEREST_FEED
+                setupMainInterface()
+            }
+        }
+        projHeader.addView(btnPinterestLink)
+        contentContainer.addView(projHeader)
+
+        // Liste des cartes de projets
+        projects.forEach { proj ->
+            contentContainer.addView(buildProjectCard(proj))
+        }
     }
 
     private fun buildProjectCard(proj: SlideshowProject): View {
+        val isActive = proj.id == activeProject?.id
         val card = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                cornerRadius = dp(14).toFloat()
+                cornerRadius = dp(20).toFloat()
+                setStroke(dp(isActive.let { if (it) 2 else 1 }), if (isActive) mainBlue else cardBorderColor)
             }
-            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(6), 0, dp(6)) }
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(4), 0, dp(10)) }
         }
 
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        // Miniature
         val thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             layoutParams = LinearLayout.LayoutParams(dp(56), dp(72))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#18181B"))
+                cornerRadius = dp(14).toFloat()
+            }
             if (proj.slides.isNotEmpty()) {
                 val f = File(Slides.slidesDir(this@MainActivity), proj.slides[0].fileName)
                 if (f.exists()) {
                     val o = BitmapFactory.Options().apply { inSampleSize = 4 }
                     setImageBitmap(BitmapFactory.decodeFile(f.absolutePath, o))
                 }
-            } else {
-                setBackgroundColor(Color.LTGRAY)
             }
         }
-        card.addView(thumb)
+        topRow.addView(thumb)
 
-        val infoBox = LinearLayout(this).apply {
+        val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(dp(12), 0, dp(12), 0) }
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(dp(14), 0, dp(8), 0) }
         }
-        infoBox.addView(TextView(this).apply {
+
+        // Mode pill
+        val pillRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        pillRow.addView(TextView(this).apply {
+            text = if (proj.mode == "slideshow") "DIAPORAMA" else "IMAGE UNIQUE"
+            textSize = 9f
+            setTextColor(if (proj.mode == "slideshow") darkBlue else Color.parseColor("#166534"))
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            background = GradientDrawable().apply {
+                setColor(if (proj.mode == "slideshow") Color.parseColor("#DBEAFE") else Color.parseColor("#DCFCE7"))
+                cornerRadius = dp(6).toFloat()
+            }
+        })
+        if (isActive) {
+            pillRow.addView(TextView(this).apply {
+                text = "Actif"
+                textSize = 9f
+                setTextColor(Color.parseColor("#92400E"))
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+                layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(dp(6), 0, 0, 0) }
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#FEF3C7"))
+                    cornerRadius = dp(6).toFloat()
+                }
+            })
+        }
+        info.addView(pillRow)
+
+        info.addView(TextView(this).apply {
             text = proj.title
             textSize = 16f
             setTextColor(darkBlue)
+            setPadding(0, dp(3), 0, dp(2))
         })
-        infoBox.addView(TextView(this).apply {
-            text = "${proj.slides.size} image(s) • ${if (proj.mode == "slideshow") "Diaporama" else "Image unique"}"
+
+        info.addView(TextView(this).apply {
+            text = "${proj.slides.size} images • ${proj.defaultDurationSec}s par défaut"
             textSize = 12f
             setTextColor(Color.GRAY)
         })
-        card.addView(infoBox)
+        topRow.addView(info)
+        card.addView(topRow)
 
-        // Bouton Éditer
+        // Boutons bas de carte
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(12), 0, 0) }
+        }
+
         val editBtn = Button(this).apply {
-            text = "Éditer"
+            text = "Éditer le projet →"
             setAllCaps(false)
-            setTextColor(Color.WHITE)
+            textSize = 12f
+            setTextColor(darkBlue)
             background = GradientDrawable().apply {
-                setColor(mainBlue)
-                cornerRadius = dp(10).toFloat()
+                setColor(Color.parseColor("#E3F2FD"))
+                cornerRadius = dp(12).toFloat()
             }
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(0, 0, dp(6), 0) }
             setOnClickListener {
                 activeProject = proj
                 Slides.setActiveProject(this@MainActivity, proj)
-                navigateTo(Page.PROJECT_EDIT)
+                currentPage = Page.PROJECT_EDIT
+                setupMainInterface()
             }
         }
-        card.addView(editBtn)
+        btnRow.addView(editBtn)
+
+        val playBtn = Button(this).apply {
+            text = "▶ Lancer"
+            setAllCaps(false)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(mainBlue)
+                cornerRadius = dp(12).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(wrap, wrap)
+            setOnClickListener {
+                activeProject = proj
+                Slides.setActiveProject(this@MainActivity, proj)
+                LiveWallpaperPreviewDialog(this@MainActivity, proj).show()
+            }
+        }
+        btnRow.addView(playBtn)
+        card.addView(btnRow)
 
         return card
     }
 
     private fun showNewProjectDialog() {
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle("Nouveau Projet")
-        builder.setItems(arrayOf("1. Diaporama (Plusieurs images)", "2. Image Unique")) { _, which ->
-            val mode = if (which == 0) "slideshow" else "single"
-            val newProj = SlideshowProject(
-                id = "proj_" + System.currentTimeMillis(),
-                title = if (mode == "slideshow") "Nouveau Diaporama" else "Nouveau Fond Unique",
-                mode = mode
-            )
-            val projects = Slides.loadProjects(this)
-            projects.add(0, newProj)
-            Slides.saveProjects(this, projects)
-            activeProject = newProj
-            Slides.setActiveProject(this, newProj)
-            navigateTo(Page.PROJECT_EDIT)
-        }
-        builder.show()
+        val options = arrayOf("1. Diaporama (Plusieurs images avec durée)", "2. Image Unique (Fond ultra haute qualité)")
+        AlertDialog.Builder(this)
+            .setTitle("Nouveau Projet")
+            .setItems(options) { _, which ->
+                val mode = if (which == 0) "slideshow" else "single"
+                val newProj = SlideshowProject(
+                    id = "proj_" + System.currentTimeMillis(),
+                    title = if (mode == "slideshow") "Nouveau Diaporama" else "Nouveau Fond Unique",
+                    mode = mode
+                )
+                val projects = Slides.loadProjects(this)
+                projects.add(0, newProj)
+                Slides.saveProjects(this, projects)
+                activeProject = newProj
+                Slides.setActiveProject(this, newProj)
+                currentPage = Page.PROJECT_EDIT
+                setupMainInterface()
+            }
+            .show()
     }
 
     // ==========================================
-    // 2. PAGE ÉDITION DU DIAPORAMA / FOND
+    // 2. PAGE ÉDITION PROJET (Identique ProjectEditPage.tsx)
     // ==========================================
 
-    private fun buildProjectEditPage(): View {
-        val proj = activeProject ?: return buildHomePage()
-        val pad = dp(16)
-        val col = LinearLayout(this).apply {
+    private fun renderProjectEditPage() {
+        val proj = activeProject ?: return renderHomePage()
+
+        // Carte En-tête Projet
+        val topCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad * 2)
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(20).toFloat()
+                setStroke(dp(1), cardBorderColor)
+            }
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(14)) }
         }
 
-        col.addView(smallTextButton("← Retour à l'accueil") { navigateTo(Page.HOME) })
+        val modeLabel = TextView(this).apply {
+            text = if (proj.mode == "slideshow") "MODE DIAPORAMA MULTI-IMAGES" else "MODE IMAGE UNIQUE"
+            textSize = 10f
+            setTextColor(if (proj.mode == "slideshow") darkBlue else Color.parseColor("#166534"))
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            background = GradientDrawable().apply {
+                setColor(if (proj.mode == "slideshow") Color.parseColor("#DBEAFE") else Color.parseColor("#DCFCE7"))
+                cornerRadius = dp(8).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(0, 0, 0, dp(8)) }
+        }
+        topCard.addView(modeLabel)
 
-        col.addView(label(proj.title, 24f, darkBlue))
-        col.addView(label("Mode : ${if (proj.mode == "slideshow") "Diaporama" else "Image Unique"}", 13f, Color.parseColor("#1565C0")))
+        val titleInput = EditText(this).apply {
+            setText(proj.title)
+            textSize = 20f
+            setTextColor(darkBlue)
+            setBackgroundColor(Color.TRANSPARENT)
+            setPadding(0, dp(2), 0, dp(6))
+            setOnFocusChangeListener { _, hasFocus ->
+                if (!hasFocus) {
+                    proj.title = text.toString()
+                    saveCurrentProject()
+                }
+            }
+        }
+        topCard.addView(titleInput)
 
-        // Bouton Ajouter des images
-        col.addView(button("1. Choisir / Ajouter des images") {
-            pick("image/*", true, reqImages)
+        val btnPreviewTop = Button(this).apply {
+            text = if (proj.mode == "slideshow") "▶ Lancer Diaporama" else "📱 Prévisualiser"
+            setAllCaps(false)
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(mainBlue)
+                cornerRadius = dp(14).toFloat()
+            }
+            setOnClickListener {
+                LiveWallpaperPreviewDialog(this@MainActivity, proj).show()
+            }
+        }
+        topCard.addView(btnPreviewTop)
+        contentContainer.addView(topCard)
+
+        // Réglages Cible (Accueil, Verrouillage, Les deux)
+        val targetCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), cardBorderColor)
+            }
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(14)) }
+        }
+        targetCard.addView(TextView(this).apply {
+            text = "Appliquer sur :"
+            textSize = 13f
+            setTextColor(darkBlue)
+            setPadding(0, 0, 0, dp(6))
         })
-
-        col.addView(label("Images du projet (${proj.slides.size})", 18f, darkBlue))
-
-        val slidesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        proj.slides.forEachIndexed { index, slide ->
-            slidesBox.addView(buildSlideRow(index, slide))
-        }
-        if (proj.slides.isEmpty()) {
-            slidesBox.addView(label("Aucune image. Touche « 1. Choisir / Ajouter des images ».", 14f, darkBlue))
-        }
-        col.addView(slidesBox)
-
-        // Paramètres de diaporama
-        col.addView(label("Appliquer sur :", 16f, darkBlue))
-        val targetRadio = radios(arrayOf("Écran d'accueil", "Écran de verrouillage", "Les deux"), proj.target)
-        col.addView(targetRadio)
-
-        // Actions
-        col.addView(button("Appliquer maintenant") {
-            proj.target = selected(targetRadio)
+        val targetRadio = radios(arrayOf("Écran d'accueil", "Écran de verrouillage", "Les deux"), proj.globalTarget)
+        targetRadio.setOnCheckedChangeListener { _, _ ->
+            proj.globalTarget = selected(targetRadio)
             saveCurrentProject()
-            thread {
-                val ok = Slides.applyNext(applicationContext)
-                runOnUiThread { toast(if (ok) "Fond d'écran changé ✔" else "Ajoute d'abord des images") }
+        }
+        targetCard.addView(targetRadio)
+        contentContainer.addView(targetCard)
+
+        // Liste des Diapositives
+        val slidesHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(10)) }
+        }
+        slidesHeader.addView(TextView(this).apply {
+            text = "Images & Réglages Individuels (${proj.slides.size})"
+            textSize = 16f
+            setTextColor(darkBlue)
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f)
+        })
+        val addBtn = Button(this).apply {
+            text = "+ Ajouter"
+            setAllCaps(false)
+            textSize = 12f
+            setTextColor(mainBlue)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E3F2FD"))
+                cornerRadius = dp(10).toFloat()
+            }
+            setOnClickListener { pick("image/*", true, reqImages) }
+        }
+        slidesHeader.addView(addBtn)
+        contentContainer.addView(slidesHeader)
+
+        proj.slides.forEachIndexed { i, slide ->
+            contentContainer.addView(buildSlideRow(i, slide))
+        }
+
+        if (proj.slides.isEmpty()) {
+            val emptyBox = TextView(this).apply {
+                text = "Aucune image dans ce projet.\nTouche « + Ajouter » pour importer des images."
+                textSize = 13f
+                setTextColor(Color.GRAY)
+                gravity = Gravity.CENTER
+                setPadding(dp(20), dp(30), dp(20), dp(30))
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadius = dp(16).toFloat()
+                }
+            }
+            contentContainer.addView(emptyBox)
+        }
+
+        // Actions globales en bas
+        val bottomActions = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(16), 0, 0) }
+        }
+
+        bottomActions.addView(Button(this).apply {
+            text = "Appliquer maintenant sur le téléphone"
+            setAllCaps(false)
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(mainBlue)
+                cornerRadius = dp(14).toFloat()
+            }
+            setOnClickListener {
+                thread {
+                    val ok = Slides.applyNext(applicationContext)
+                    runOnUiThread { toast(if (ok) "Fond d'écran changé ✔" else "Ajoute d'abord des images") }
+                }
             }
         })
 
         if (proj.mode == "slideshow") {
-            col.addView(button("Démarrer le diaporama automatique") {
-                proj.target = selected(targetRadio)
-                saveCurrentProject()
-                startSlideWork(proj.defaultDurationSec)
-                toast("Diaporama démarré")
-            })
-
-            col.addView(button("Arrêter le diaporama") {
-                WorkManager.getInstance(this).cancelUniqueWork("slides")
-                toast("Diaporama arrêté")
+            bottomActions.addView(Button(this).apply {
+                text = "Démarrer le diaporama automatique"
+                setAllCaps(false)
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    setColor(mainBlue)
+                    cornerRadius = dp(14).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(8), 0, 0) }
+                setOnClickListener {
+                    startSlideWork(proj.defaultDurationSec)
+                    toast("Diaporama automatique démarré ✔")
+                }
             })
         }
-
-        col.addView(button("Activer le fond animé en direct") {
-            proj.target = selected(targetRadio)
-            saveCurrentProject()
-            openLiveWallpaper()
-        })
-
-        return col
+        contentContainer.addView(bottomActions)
     }
 
     private fun buildSlideRow(i: Int, slide: SlideItem): View {
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
-                cornerRadius = dp(12).toFloat()
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), cardBorderColor)
             }
-            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(4), 0, dp(4)) }
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(4), 0, dp(8)) }
         }
 
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        // Thumbnail
         val thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            layoutParams = LinearLayout.LayoutParams(dp(50), dp(64))
+            layoutParams = LinearLayout.LayoutParams(dp(54), dp(70))
+            background = GradientDrawable().apply {
+                setColor(Color.BLACK)
+                cornerRadius = dp(12).toFloat()
+            }
             val f = File(Slides.slidesDir(this@MainActivity), slide.fileName)
             if (f.exists()) {
                 val o = BitmapFactory.Options().apply { inSampleSize = 4 }
                 setImageBitmap(BitmapFactory.decodeFile(f.absolutePath, o))
             }
         }
-        row.addView(thumb)
+        top.addView(thumb)
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(dp(8), 0, dp(8), 0) }
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(dp(12), 0, dp(8), 0) }
         }
         info.addView(TextView(this).apply {
-            text = "Image ${i + 1} (${slide.durationSec}s)"
+            text = "Image ${i + 1} • ${slide.name}"
             textSize = 14f
             setTextColor(darkBlue)
         })
+
+        // Music badge
         info.addView(TextView(this).apply {
-            text = if (slide.audioName != null) "♪ ${slide.audioName}" else "Aucun son"
-            textSize = 12f
-            setTextColor(if (slide.audioName != null) Color.parseColor("#2E7D32") else Color.GRAY)
+            text = if (slide.audio != null) "♪ ${slide.audio?.name} (${slide.audio?.let { it.endTimeSec - it.startTimeSec }}s)" else "Aucun son associé"
+            textSize = 11f
+            setTextColor(if (slide.audio != null) Color.parseColor("#15803D") else Color.GRAY)
+            setPadding(0, dp(3), 0, 0)
         })
-        row.addView(info)
+        top.addView(info)
+        row.addView(top)
+
+        // Ligne de boutons individuels
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(10), 0, 0) }
+        }
 
         // Bouton Durée Individuelle
-        val durBtn = smallButton("${slide.durationSec}s") {
-            showDurationPicker(slide)
+        val durBtn = Button(this).apply {
+            text = "⏱ ${slide.durationSec}s"
+            setAllCaps(false)
+            textSize = 11f
+            setTextColor(darkBlue)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F1F5F9"))
+                cornerRadius = dp(10).toFloat()
+            }
+            setPadding(dp(8), 0, dp(8), 0)
+            setOnClickListener { showDurationPicker(slide) }
         }
-        row.addView(durBtn)
+        actions.addView(durBtn)
 
-        // Bouton Son / Trimmer
-        val musicBtn = smallButton("♪") {
-            editingSlide = slide
-            navigateTo(Page.AUDIO_EDITOR)
+        // Bouton Son
+        val musicBtn = Button(this).apply {
+            text = "♪ Son"
+            setAllCaps(false)
+            textSize = 11f
+            setTextColor(if (slide.audio != null) Color.parseColor("#15803D") else mainBlue)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F1F5F9"))
+                cornerRadius = dp(10).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(dp(4), 0, dp(4), 0) }
+            setOnClickListener {
+                editingSlideForMusic = slide
+                AudioEditorDialog(this@MainActivity, slide, { pick("audio/*", false, reqMusic) }) { clip ->
+                    slide.audio = clip
+                    saveCurrentProject()
+                    renderCurrentPage()
+                    toast("Son associé ✔")
+                }.show()
+            }
         }
-        row.addView(musicBtn)
+        actions.addView(musicBtn)
 
-        // Bouton Retouches / Image Editor
-        val editBtn = smallButton("✎") {
-            editingSlide = slide
-            navigateTo(Page.IMAGE_EDITOR)
+        // Bouton Retouches
+        val editBtn = Button(this).apply {
+            text = "✎ Modifier"
+            setAllCaps(false)
+            textSize = 11f
+            setTextColor(darkBlue)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#F1F5F9"))
+                cornerRadius = dp(10).toFloat()
+            }
+            setOnClickListener {
+                ImageEditorDialog(this@MainActivity, slide, { adj ->
+                    slide.adjustments = adj
+                    saveCurrentProject()
+                    renderCurrentPage()
+                    toast("Retouches enregistrées ✔")
+                }) { bgFileName ->
+                    Slides.setAppWallpaper(this@MainActivity, bgFileName)
+                    setupMainInterface()
+                }.show()
+            }
         }
-        row.addView(editBtn)
+        actions.addView(editBtn)
+
+        // Spacer
+        actions.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
 
         // Bouton Supprimer
-        val delBtn = smallButton("✕") {
-            activeProject?.slides?.removeAt(i)
-            saveCurrentProject()
-            navigateTo(Page.PROJECT_EDIT)
+        val delBtn = Button(this).apply {
+            text = "🗑"
+            textSize = 14f
+            setTextColor(Color.parseColor("#DC2626"))
+            setBackgroundColor(Color.TRANSPARENT)
+            minWidth = 0; minimumWidth = 0; setPadding(dp(6), 0, dp(6), 0)
+            setOnClickListener {
+                activeProject?.slides?.removeAt(i)
+                saveCurrentProject()
+                renderCurrentPage()
+            }
         }
-        row.addView(delBtn)
+        actions.addView(delBtn)
+        row.addView(actions)
 
         return row
     }
@@ -407,341 +841,409 @@ class MainActivity : Activity() {
             .setItems(options) { _, which ->
                 slide.durationSec = seconds[which]
                 saveCurrentProject()
-                navigateTo(Page.PROJECT_EDIT)
-                toast("Durée réglée à ${options[which]}")
+                renderCurrentPage()
             }
             .show()
     }
 
     // ==========================================
-    // 3. PAGE ÉDITEUR D'IMAGE (RECADRAGE & FILTRES)
+    // 3. PAGE DÉCOUVERTE PINTEREST
     // ==========================================
 
-    private fun buildImageEditorPage(): View {
-        val slide = editingSlide ?: return buildHomePage()
-        val pad = dp(16)
-        val col = LinearLayout(this).apply {
+    private fun renderPinterestFeedPage() {
+        val banner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad * 2)
-        }
-
-        col.addView(smallTextButton("← Retour au projet") { navigateTo(Page.PROJECT_EDIT) })
-        col.addView(label("Éditeur d'Image : ${slide.name}", 22f, darkBlue))
-
-        val imgFile = File(Slides.slidesDir(this), slide.fileName)
-        var currentBitmap = if (imgFile.exists()) BitmapFactory.decodeFile(imgFile.absolutePath) else null
-
-        val preview = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            layoutParams = LinearLayout.LayoutParams(match, dp(260))
-            if (currentBitmap != null) {
-                setImageBitmap(Slides.processFilteredBitmap(currentBitmap!!, slide))
+            background = GradientDrawable().apply {
+                colors = intArrayOf(Color.parseColor("#E11D48"), Color.parseColor("#BE123C"))
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                cornerRadius = dp(24).toFloat()
             }
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(14)) }
         }
-        col.addView(preview)
 
-        val refreshPreview = {
-            if (currentBitmap != null) {
-                preview.setImageBitmap(Slides.processFilteredBitmap(currentBitmap!!, slide))
+        banner.addView(TextView(this).apply {
+            text = "Découverte Pinterest"
+            textSize = 24f
+            setTextColor(Color.WHITE)
+        })
+
+        banner.addView(TextView(this).apply {
+            text = "Explore et importe des fonds d'écran tendances ou applique-les directement dans l'application."
+            textSize = 12f
+            setTextColor(Color.parseColor("#FFE4E6"))
+            setPadding(0, dp(4), 0, dp(12))
+        })
+
+        val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val searchInput = EditText(this).apply {
+            hint = "Chercher nature, océan, anime..."
+            setTextColor(Color.BLACK)
+            setHintTextColor(Color.GRAY)
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(12).toFloat()
             }
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(0, 0, dp(8), 0) }
         }
+        searchRow.addView(searchInput)
 
-        // Sliders d'ajustements
-        col.addView(label("Luminosité : ${slide.brightness}%", 14f, darkBlue))
-        val seekBri = SeekBar(this).apply {
-            max = 100
-            progress = slide.brightness - 50
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {
-                    slide.brightness = p + 50
-                    refreshPreview()
-                }
-                override fun onStartTrackingTouch(b: SeekBar?) {}
-                override fun onStopTrackingTouch(b: SeekBar?) {}
-            })
-        }
-        col.addView(seekBri)
-
-        col.addView(label("Contraste : ${slide.contrast}%", 14f, darkBlue))
-        val seekCon = SeekBar(this).apply {
-            max = 100
-            progress = slide.contrast - 50
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {
-                    slide.contrast = p + 50
-                    refreshPreview()
-                }
-                override fun onStartTrackingTouch(b: SeekBar?) {}
-                override fun onStopTrackingTouch(b: SeekBar?) {}
-            })
-        }
-        col.addView(seekCon)
-
-        col.addView(label("Saturation : ${slide.saturation}%", 14f, darkBlue))
-        val seekSat = SeekBar(this).apply {
-            max = 200
-            progress = slide.saturation
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {
-                    slide.saturation = p
-                    refreshPreview()
-                }
-                override fun onStartTrackingTouch(b: SeekBar?) {}
-                override fun onStopTrackingTouch(b: SeekBar?) {}
-            })
-        }
-        col.addView(seekSat)
-
-        // Filtres 1-clic
-        val rowFilters = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(match, wrap)
-        }
-        rowFilters.addView(smallTextButton("Normal") {
-            slide.brightness = 100; slide.contrast = 100; slide.saturation = 100
-            seekBri.progress = 50; seekCon.progress = 50; seekSat.progress = 100
-            refreshPreview()
-        })
-        rowFilters.addView(smallTextButton("Vif") {
-            slide.contrast = 125; slide.saturation = 150
-            seekCon.progress = 75; seekSat.progress = 150
-            refreshPreview()
-        })
-        rowFilters.addView(smallTextButton("N&B") {
-            slide.saturation = 0; seekSat.progress = 0
-            refreshPreview()
-        })
-        rowFilters.addView(smallTextButton("Rétro") {
-            slide.brightness = 95; slide.contrast = 110; slide.saturation = 80
-            refreshPreview()
-        })
-        col.addView(rowFilters)
-
-        // Bouton Fond de l'application
-        col.addView(button("Mettre en fond de cette application") {
-            Slides.setAppWallpaperPath(this, imgFile.absolutePath)
-            toast("Fond d'écran appliqué dans l'app !")
-        })
-
-        // Bouton Sauvegarder
-        col.addView(button("Sauvegarder les retouches") {
-            saveCurrentProject()
-            navigateTo(Page.PROJECT_EDIT)
-            toast("Retouches enregistrées ✔")
-        })
-
-        return col
-    }
-
-    // ==========================================
-    // 4. PAGE ÉDITEUR DE SON (DÉCOUPE & VOLUME)
-    // ==========================================
-
-    private fun buildAudioEditorPage(): View {
-        val slide = editingSlide ?: return buildHomePage()
-        val pad = dp(16)
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad * 2)
-        }
-
-        col.addView(smallTextButton("← Retour au projet") {
-            stopPreviewAudio()
-            navigateTo(Page.PROJECT_EDIT)
-        })
-
-        col.addView(label("Éditeur de Son", 22f, darkBlue))
-        col.addView(label("Son actuel : ${slide.audioName ?: "Aucun"}", 14f, Color.parseColor("#1565C0")))
-
-        col.addView(button("Choisir un fichier audio") {
-            pick("audio/*", false, reqMusic)
-        })
-
-        // Contrôles de découpe (Start & End)
-        col.addView(label("Début de l'extrait : ${slide.audioStartMs / 1000}s", 14f, darkBlue))
-        val seekStart = SeekBar(this).apply {
-            max = 60
-            progress = slide.audioStartMs / 1000
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                    slide.audioStartMs = p * 1000
-                }
-                override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) {}
-            })
-        }
-        col.addView(seekStart)
-
-        col.addView(label("Volume : ${(slide.audioVolume * 100).toInt()}%", 14f, darkBlue))
-        val seekVol = SeekBar(this).apply {
-            max = 100
-            progress = (slide.audioVolume * 100).toInt()
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                    slide.audioVolume = p / 100f
-                    tempMediaPlayer?.setVolume(slide.audioVolume, slide.audioVolume)
-                }
-                override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) {}
-            })
-        }
-        col.addView(seekVol)
-
-        // Pré-écoute
-        col.addView(button("▶ Écouter l'extrait") {
-            val audioName = slide.audioFileName ?: return@button
-            val f = File(Slides.audioDir(this), audioName)
-            if (!f.exists()) return@button
-            stopPreviewAudio()
-            try {
-                tempMediaPlayer = MediaPlayer().apply {
-                    setDataSource(f.absolutePath)
-                    setVolume(slide.audioVolume, slide.audioVolume)
-                    isLooping = true
-                    prepare()
-                    seekTo(slide.audioStartMs)
-                    start()
-                }
-            } catch (e: Exception) {
+        searchRow.addView(Button(this).apply {
+            text = "Rechercher"
+            setAllCaps(false)
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                setColor(Color.BLACK)
+                cornerRadius = dp(12).toFloat()
             }
+            setOnClickListener { openPinterest(searchInput.text.toString()) }
         })
+        banner.addView(searchRow)
+        contentContainer.addView(banner)
 
-        col.addView(button("⏹ Arrêter l'écoute") {
-            stopPreviewAudio()
-        })
-
-        col.addView(button("Sauvegarder et Associer") {
-            stopPreviewAudio()
-            saveCurrentProject()
-            navigateTo(Page.PROJECT_EDIT)
-            toast("Son associé avec succès ✔")
-        })
-
-        return col
-    }
-
-    private fun stopPreviewAudio() {
-        tempMediaPlayer?.stop()
-        tempMediaPlayer?.release()
-        tempMediaPlayer = null
-    }
-
-    // ==========================================
-    // 5. PAGE SONS SYSTÈME (SONNERIES & NOTIFS)
-    // ==========================================
-
-    private fun buildSystemSoundsPage(): View {
-        val pad = dp(16)
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad * 2)
+        // Catégories chips
+        val chipRow = HorizontalScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(12)) }
         }
-
-        col.addView(smallTextButton("← Retour à l'accueil") { navigateTo(Page.HOME) })
-        col.addView(label("Sons Système & Sonneries", 22f, darkBlue))
-        col.addView(label("Personnalise les alertes sonores de ton téléphone", 13f, Color.parseColor("#1565C0")))
-
-        val sounds = arrayOf(
-            Triple("Goutte d’eau pure", "Notification", android.provider.Settings.System.DEFAULT_NOTIFICATION_URI),
-            Triple("Carillon doux", "Sonnerie", android.provider.Settings.System.DEFAULT_RINGTONE_URI),
-            Triple("Réveil Matin", "Alarme", android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI)
+        val chipContainer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val cats = listOf(
+            Pair("all", "Toutes les tendances"),
+            Pair("nature", "🌿 Nature"),
+            Pair("ocean", "🌊 Océan"),
+            Pair("anime", "✨ Anime"),
+            Pair("cyberpunk", "⚡ Cyberpunk"),
+            Pair("minimal", "🎨 Minimaliste"),
+            Pair("space", "🌌 Espace")
         )
+        cats.forEach { (catId, label) ->
+            val isSel = pinterestCategory == catId
+            val b = Button(this).apply {
+                text = label
+                setAllCaps(false)
+                textSize = 11f
+                setTextColor(if (isSel) Color.WHITE else darkBlue)
+                background = GradientDrawable().apply {
+                    setColor(if (isSel) mainBlue else Color.WHITE)
+                    cornerRadius = dp(12).toFloat()
+                    if (!isSel) setStroke(dp(1), cardBorderColor)
+                }
+                layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(0, 0, dp(6), 0) }
+                setOnClickListener {
+                    pinterestCategory = catId
+                    renderCurrentPage()
+                }
+            }
+            chipContainer.addView(b)
+        }
+        chipRow.addView(chipContainer)
+        contentContainer.addView(chipRow)
 
-        for (s in sounds) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(12), dp(12), dp(12), dp(12))
+        // Liste des cartes
+        val filtered = Presets.PINTEREST_EXPLORE_FEED.filter {
+            pinterestCategory == "all" || it.category == pinterestCategory
+        }
+
+        filtered.forEach { item ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
                 background = GradientDrawable().apply {
                     setColor(Color.WHITE)
-                    cornerRadius = dp(12).toFloat()
+                    cornerRadius = dp(18).toFloat()
+                    setStroke(dp(1), cardBorderColor)
                 }
-                layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(6), 0, dp(6)) }
+                setPadding(dp(14), dp(14), dp(14), dp(14))
+                layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(4), 0, dp(10)) }
             }
 
-            val t = TextView(this).apply {
-                text = "${s.first}\n(${s.second})"
-                textSize = 14f
+            val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            titleRow.addView(TextView(this).apply {
+                text = item.title
+                textSize = 15f
                 setTextColor(darkBlue)
                 layoutParams = LinearLayout.LayoutParams(0, wrap, 1f)
-            }
-            row.addView(t)
+            })
+            titleRow.addView(TextView(this).apply {
+                text = "📌 Pinterest"
+                textSize = 10f
+                setTextColor(Color.parseColor("#E11D48"))
+            })
+            card.addView(titleRow)
 
-            val testBtn = smallButton("▶") {
-                try {
-                    val p = MediaPlayer.create(this@MainActivity, s.third)
-                    p?.start()
-                } catch (e: Exception) {
-                    toast("Lecture du son système")
+            card.addView(TextView(this).apply {
+                text = item.tags.joinToString(" • ") { "#$it" }
+                textSize = 11f
+                setTextColor(Color.GRAY)
+                setPadding(0, dp(2), 0, dp(10))
+            })
+
+            val actionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            actionRow.addView(Button(this).apply {
+                text = "+ Ajouter au projet"
+                setAllCaps(false)
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    setColor(mainBlue)
+                    cornerRadius = dp(10).toFloat()
                 }
-            }
-            row.addView(testBtn)
+                layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(0, 0, dp(6), 0) }
+                setOnClickListener {
+                    val proj = activeProject
+                    if (proj != null) {
+                        proj.slides.add(SlideItem(name = item.title, fileName = "starter_1.jpg"))
+                        saveCurrentProject()
+                        toast("« ${item.title} » ajouté à ${proj.title} ✔")
+                    }
+                }
+            })
 
-            col.addView(row)
+            actionRow.addView(Button(this).apply {
+                text = "Fond d'App"
+                setAllCaps(false)
+                textSize = 12f
+                setTextColor(darkBlue)
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#E3F2FD"))
+                    cornerRadius = dp(10).toFloat()
+                }
+                setOnClickListener {
+                    Slides.setAppWallpaper(this@MainActivity, "starter_1.jpg")
+                    setupMainInterface()
+                    toast("Fond d'application défini ✔")
+                }
+            })
+            card.addView(actionRow)
+            contentContainer.addView(card)
         }
-
-        return col
     }
 
     // ==========================================
-    // 6. PAGE PARAMÈTRES DE L'APPLICATION
+    // 4. PAGE SONS SYSTÈME
     // ==========================================
 
-    private fun buildSettingsPage(): View {
-        val pad = dp(16)
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad * 2)
-        }
-
-        col.addView(smallTextButton("← Retour à l'accueil") { navigateTo(Page.HOME) })
-        col.addView(label("Paramètres", 22f, darkBlue))
-
-        // Fond d'écran interne de l'application
-        col.addView(label("Fond d'écran interne de l'application", 16f, darkBlue))
-        val curAppWp = Slides.getAppWallpaperPath(this)
-        col.addView(TextView(this).apply {
-            text = if (curAppWp != null) "Un fond personnalisé est actif" else "Fond par défaut (bleu doux)"
-            setTextColor(Color.GRAY)
+    private fun renderSystemSoundsPage() {
+        contentContainer.addView(TextView(this).apply {
+            text = "Sons Système & Sonneries"
+            textSize = 24f
+            setTextColor(darkBlue)
         })
 
-        if (curAppWp != null) {
-            col.addView(button("Réinitialiser le fond de l'application") {
-                Slides.setAppWallpaperPath(this, null)
-                toast("Fond par défaut rétabli")
-                navigateTo(Page.SETTINGS)
-            })
-        }
+        contentContainer.addView(TextView(this).apply {
+            text = "Personnalise les alertes sonores, sonneries et alarmes de ton téléphone."
+            textSize = 13f
+            setTextColor(subtitleBlue)
+            setPadding(0, dp(2), 0, dp(14))
+        })
 
-        // Sécurité PIN
-        col.addView(label("Sécurité et Verrouillage", 16f, darkBlue))
-        val pinBox = CheckBox(this).apply {
-            text = "Protéger l'ouverture par empreinte / code"
-            setTextColor(darkBlue)
-            isChecked = Slides.prefs(this@MainActivity).getBoolean("security_pin_enabled", false)
-            setOnCheckedChangeListener { _, checked ->
-                Slides.prefs(this@MainActivity).edit().putBoolean("security_pin_enabled", checked).apply()
-                toast(if (checked) "Verrouillage activé" else "Verrouillage désactivé")
+        Presets.SYSTEM_SOUNDS_CATALOG.forEach { s ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadius = dp(16).toFloat()
+                    setStroke(dp(1), cardBorderColor)
+                }
+                setPadding(dp(14), dp(14), dp(14), dp(14))
+                layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(4), 0, dp(8)) }
             }
-        }
-        col.addView(pinBox)
 
-        return col
+            val icon = TextView(this).apply {
+                text = when (s.category) {
+                    "notification" -> "🔔"
+                    "ringtone" -> "📞"
+                    else -> "⏰"
+                }
+                textSize = 20f
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#E3F2FD"))
+                    cornerRadius = dp(12).toFloat()
+                }
+            }
+            card.addView(icon)
+
+            val info = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(dp(12), 0, dp(8), 0) }
+            }
+            info.addView(TextView(this).apply {
+                text = s.title
+                textSize = 15f
+                setTextColor(darkBlue)
+            })
+            info.addView(TextView(this).apply {
+                text = "${s.category.uppercase()} • ${s.durationLabel}"
+                textSize = 11f
+                setTextColor(Color.GRAY)
+            })
+            card.addView(info)
+
+            val playBtn = Button(this).apply {
+                text = "▶ Écouter"
+                setAllCaps(false)
+                textSize = 11f
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    setColor(mainBlue)
+                    cornerRadius = dp(10).toFloat()
+                }
+                setOnClickListener {
+                    tempSystemSoundPlayer?.release()
+                    try {
+                        val uri = when (s.category) {
+                            "notification" -> android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+                            "ringtone" -> android.provider.Settings.System.DEFAULT_RINGTONE_URI
+                            else -> android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI
+                        }
+                        tempSystemSoundPlayer = MediaPlayer.create(this@MainActivity, uri)?.apply {
+                            start()
+                        }
+                    } catch (e: Exception) {
+                        toast("Lecture du son...")
+                    }
+                }
+            }
+            card.addView(playBtn)
+            contentContainer.addView(card)
+        }
     }
 
     // ==========================================
-    // Actions & Helpers
+    // 5. PAGE PARAMÈTRES
+    // ==========================================
+
+    private fun renderSettingsPage() {
+        contentContainer.addView(TextView(this).apply {
+            text = "Paramètres de l'Application"
+            textSize = 24f
+            setTextColor(darkBlue)
+            setPadding(0, 0, 0, dp(14))
+        })
+
+        val config = Slides.loadAppConfig(this)
+
+        // 1. Fond d'écran interne de l'application
+        val cardWp = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), cardBorderColor)
+            }
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(12)) }
+        }
+        cardWp.addView(TextView(this).apply {
+            text = "Fond d'écran interne de l'application"
+            textSize = 16f
+            setTextColor(darkBlue)
+        })
+
+        cardWp.addView(TextView(this).apply {
+            text = if (config.appWallpaperFileName != null) "Fond personnalisé actif" else "Fond par défaut (bleu doux)"
+            textSize = 12f
+            setTextColor(Color.GRAY)
+            setPadding(0, dp(4), 0, dp(8))
+        })
+
+        if (config.appWallpaperFileName != null) {
+            cardWp.addView(Button(this).apply {
+                text = "Retirer le fond d'écran d'application"
+                setAllCaps(false)
+                setTextColor(Color.parseColor("#DC2626"))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#FEE2E2"))
+                    cornerRadius = dp(10).toFloat()
+                }
+                setOnClickListener {
+                    Slides.setAppWallpaper(this@MainActivity, null)
+                    toast("Fond d'écran par défaut rétabli")
+                    setupMainInterface()
+                }
+            })
+        }
+        contentContainer.addView(cardWp)
+
+        // 2. Sécurité & Authentification
+        val cardSec = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), cardBorderColor)
+            }
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, 0, 0, dp(12)) }
+        }
+        cardSec.addView(TextView(this).apply {
+            text = "Sécurité & Authentification"
+            textSize = 16f
+            setTextColor(darkBlue)
+        })
+
+        val pinCheck = CheckBox(this).apply {
+            text = "Protéger l'ouverture par code PIN / empreinte"
+            setTextColor(darkBlue)
+            isChecked = config.securityPinEnabled
+            setOnCheckedChangeListener { _, checked ->
+                config.securityPinEnabled = checked
+                Slides.saveAppConfig(this@MainActivity, config)
+                toast(if (checked) "Verrouillage activé (Code : ${config.securityPin})" else "Verrouillage désactivé")
+            }
+        }
+        cardSec.addView(pinCheck)
+
+        cardSec.addView(Button(this).apply {
+            text = "Modifier le code PIN (${config.securityPin})"
+            setAllCaps(false)
+            setTextColor(mainBlue)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E3F2FD"))
+                cornerRadius = dp(10).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(0, dp(8), 0, 0) }
+            setOnClickListener { showChangePinDialog(config) }
+        })
+        contentContainer.addView(cardSec)
+    }
+
+    private fun showChangePinDialog(config: AppConfig) {
+        val input = EditText(this).apply {
+            hint = "4 chiffres (ex: 1234)"
+            setSingleLine(true)
+            textSize = 18f
+            gravity = Gravity.CENTER
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Nouveau code PIN")
+            .setView(input)
+            .setPositiveButton("Enregistrer") { _, _ ->
+                val p = input.text.toString().trim()
+                if (p.length == 4) {
+                    config.securityPin = p
+                    Slides.saveAppConfig(this, config)
+                    renderCurrentPage()
+                    toast("Code PIN mis à jour : $p")
+                } else {
+                    toast("Le code PIN doit comporter exactement 4 chiffres")
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    // ==========================================
+    // Utilitaires de données & actions
     // ==========================================
 
     private fun saveCurrentProject() {
         val proj = activeProject ?: return
         val projects = Slides.loadProjects(this)
         val idx = projects.indexOfFirst { it.id == proj.id }
-        if (idx >= 0) {
-            projects[idx] = proj
-        } else {
-            projects.add(proj)
-        }
+        if (idx >= 0) projects[idx] = proj else projects.add(proj)
         Slides.saveProjects(this, projects)
     }
 
@@ -755,11 +1257,8 @@ class MainActivity : Activity() {
     }
 
     private fun openPinterest(q: String) {
-        val url = if (q.isBlank()) {
-            "https://www.pinterest.com/"
-        } else {
-            "https://www.pinterest.com/search/pins/?q=" + Uri.encode(q.trim() + " wallpaper")
-        }
+        val url = if (q.isBlank()) "https://www.pinterest.com/"
+        else "https://www.pinterest.com/search/pins/?q=" + Uri.encode(q.trim() + " wallpaper")
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         } catch (e: ActivityNotFoundException) {
@@ -779,7 +1278,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == reqAuth) {
-            if (resultCode == RESULT_OK) navigateTo(Page.HOME) else finish()
+            if (resultCode == RESULT_OK) setupMainInterface() else finish()
             return
         }
         if (resultCode != RESULT_OK || data == null) return
@@ -806,91 +1305,38 @@ class MainActivity : Activity() {
                     saveCurrentProject()
                 }
                 runOnUiThread {
-                    navigateTo(Page.PROJECT_EDIT)
+                    renderCurrentPage()
                     toast("Images ajoutées avec succès ✔")
                 }
             }
         } else if (requestCode == reqMusic) {
             val uri = data.data ?: return
-            val slide = editingSlide ?: return
+            val slide = editingSlideForMusic ?: return
             thread {
                 val res = Slides.importAudio(applicationContext, uri)
                 if (res != null) {
-                    slide.audioFileName = res.first
-                    slide.audioName = res.second
+                    slide.audio = AudioClip(
+                        name = res.second,
+                        fileName = res.first,
+                        isSynth = false
+                    )
                     saveCurrentProject()
                 }
                 runOnUiThread {
-                    navigateTo(Page.AUDIO_EDITOR)
-                    toast("Musique importée ✔")
+                    renderCurrentPage()
+                    toast("Fichier audio importé ✔")
                 }
             }
         }
     }
 
-    private fun openLiveWallpaper() {
-        val proj = activeProject
-        if (proj == null || proj.slides.isEmpty()) {
-            toast("Choisis d'abord des images")
-            return
+    override fun onBackPressed() {
+        if (currentPage != Page.HOME) {
+            currentPage = Page.HOME
+            setupMainInterface()
+        } else {
+            super.onBackPressed()
         }
-        try {
-            val i = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).putExtra(
-                WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                ComponentName(this, LiveWallpaperService::class.java)
-            )
-            startActivity(i)
-        } catch (e: ActivityNotFoundException) {
-            startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER))
-        }
-    }
-
-    // ---------- UI Helper Functions ----------
-
-    private fun label(t: String, size: Float, color: Int) = TextView(this).apply {
-        text = t
-        textSize = size
-        setTextColor(color)
-        setPadding(0, dp(8), 0, dp(4))
-    }
-
-    private fun button(t: String, onClick: () -> Unit) = Button(this).apply {
-        text = t
-        setAllCaps(false)
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            setColor(mainBlue)
-            cornerRadius = dp(12).toFloat()
-        }
-        layoutParams = LinearLayout.LayoutParams(match, wrap).apply { setMargins(0, dp(6), 0, dp(6)) }
-        setOnClickListener { onClick() }
-    }
-
-    private fun smallButton(t: String, onClick: () -> Unit) = Button(this).apply {
-        text = t
-        setAllCaps(false)
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            setColor(mainBlue)
-            cornerRadius = dp(10).toFloat()
-        }
-        minWidth = 0
-        minimumWidth = 0
-        setPadding(0, 0, 0, 0)
-        layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { setMargins(dp(2), 0, dp(2), 0) }
-        setOnClickListener { onClick() }
-    }
-
-    private fun smallTextButton(t: String, onClick: () -> Unit) = Button(this).apply {
-        text = t
-        setAllCaps(false)
-        setTextColor(mainBlue)
-        background = GradientDrawable().apply {
-            setColor(Color.WHITE)
-            cornerRadius = dp(10).toFloat()
-        }
-        layoutParams = LinearLayout.LayoutParams(wrap, wrap).apply { setMargins(0, 0, dp(8), 0) }
-        setOnClickListener { onClick() }
     }
 
     private fun radios(labels: Array<String>, checked: Int): RadioGroup {
@@ -914,7 +1360,7 @@ class MainActivity : Activity() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
-        stopPreviewAudio()
+        tempSystemSoundPlayer?.release()
         super.onDestroy()
     }
 }

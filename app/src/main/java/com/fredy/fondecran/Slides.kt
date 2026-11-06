@@ -8,8 +8,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.Rect
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -19,107 +19,6 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 
-data class SlideItem(
-    val id: String,
-    var name: String,
-    val fileName: String,
-    var durationSec: Int = 15, // Durée individuelle par image !
-    var audioName: String? = null,
-    var audioFileName: String? = null,
-    var audioStartMs: Int = 0,
-    var audioEndMs: Int = 30000,
-    var audioVolume: Float = 0.8f,
-    var zoom: Float = 1.0f,
-    var panX: Float = 0f,
-    var panY: Float = 0f,
-    var brightness: Int = 100, // 50 to 150
-    var contrast: Int = 100,   // 50 to 150
-    var saturation: Int = 100, // 0 to 200
-    var filterPreset: String = "normal"
-) {
-    fun toJson(): JSONObject = JSONObject().apply {
-        put("id", id)
-        put("name", name)
-        put("fileName", fileName)
-        put("durationSec", durationSec)
-        put("audioName", audioName ?: "")
-        put("audioFileName", audioFileName ?: "")
-        put("audioStartMs", audioStartMs)
-        put("audioEndMs", audioEndMs)
-        put("audioVolume", audioVolume.toDouble())
-        put("zoom", zoom.toDouble())
-        put("panX", panX.toDouble())
-        put("panY", panY.toDouble())
-        put("brightness", brightness)
-        put("contrast", contrast)
-        put("saturation", saturation)
-        put("filterPreset", filterPreset)
-    }
-
-    companion object {
-        fun fromJson(json: JSONObject): SlideItem = SlideItem(
-            id = json.optString("id", System.currentTimeMillis().toString()),
-            name = json.optString("name", "Image"),
-            fileName = json.optString("fileName", ""),
-            durationSec = json.optInt("durationSec", 15),
-            audioName = json.optString("audioName").takeIf { it.isNotBlank() },
-            audioFileName = json.optString("audioFileName").takeIf { it.isNotBlank() },
-            audioStartMs = json.optInt("audioStartMs", 0),
-            audioEndMs = json.optInt("audioEndMs", 30000),
-            audioVolume = json.optDouble("audioVolume", 0.8).toFloat(),
-            zoom = json.optDouble("zoom", 1.0).toFloat(),
-            panX = json.optDouble("panX", 0.0).toFloat(),
-            panY = json.optDouble("panY", 0.0).toFloat(),
-            brightness = json.optInt("brightness", 100),
-            contrast = json.optInt("contrast", 100),
-            saturation = json.optInt("saturation", 100),
-            filterPreset = json.optString("filterPreset", "normal")
-        )
-    }
-}
-
-data class SlideshowProject(
-    val id: String,
-    var title: String,
-    var mode: String = "slideshow", // "slideshow" ou "single"
-    var target: Int = 2, // 0: Accueil, 1: Verrouillage, 2: Les deux
-    var defaultDurationSec: Int = 15,
-    val slides: MutableList<SlideItem> = mutableListOf(),
-    var currentSlideIndex: Int = 0
-) {
-    fun toJson(): JSONObject = JSONObject().apply {
-        put("id", id)
-        put("title", title)
-        put("mode", mode)
-        put("target", target)
-        put("defaultDurationSec", defaultDurationSec)
-        put("currentSlideIndex", currentSlideIndex)
-        val arr = JSONArray()
-        slides.forEach { arr.put(it.toJson()) }
-        put("slides", arr)
-    }
-
-    companion object {
-        fun fromJson(json: JSONObject): SlideshowProject {
-            val proj = SlideshowProject(
-                id = json.optString("id", System.currentTimeMillis().toString()),
-                title = json.optString("title", "Nouveau Diaporama"),
-                mode = json.optString("mode", "slideshow"),
-                target = json.optInt("target", 2),
-                defaultDurationSec = json.optInt("defaultDurationSec", 15),
-                currentSlideIndex = json.optInt("currentSlideIndex", 0)
-            )
-            val arr = json.optJSONArray("slides")
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    proj.slides.add(SlideItem.fromJson(arr.getJSONObject(i)))
-                }
-            }
-            return proj
-        }
-    }
-}
-
 object Slides {
 
     fun prefs(ctx: Context) = ctx.getSharedPreferences("fond_ecran_cfg_v2", Context.MODE_PRIVATE)
@@ -128,7 +27,7 @@ object Slides {
 
     fun audioDir(ctx: Context): File = File(ctx.filesDir, "audio_v2").apply { mkdirs() }
 
-    // ---------- Gestion des projets persistants (Room-like JSON) ----------
+    // ---------- Gestion des projets persistants ----------
 
     fun loadProjects(ctx: Context): MutableList<SlideshowProject> {
         val raw = prefs(ctx).getString("projects_json", null)
@@ -143,13 +42,20 @@ object Slides {
                 e.printStackTrace()
             }
         }
+
+        // Si aucun projet n'existe, on initialise le projet starter identique au TypeScript
         if (list.isEmpty()) {
+            val starterSlides = Presets.createDefaultStarterWallpapers(ctx)
             val defaultProject = SlideshowProject(
-                id = "proj-default",
-                title = "Mon Premier Diaporama",
+                id = "proj-1",
+                title = "Mon Diaporama Nature & Anime",
+                description = "Diaporama animé avec musiques ambiantes",
                 mode = "slideshow",
-                defaultDurationSec = 15
-            )
+                globalTarget = 2,
+                defaultDurationSec = 10
+            ).apply {
+                slides.addAll(starterSlides)
+            }
             list.add(defaultProject)
             saveProjects(ctx, list)
         }
@@ -172,7 +78,32 @@ object Slides {
         prefs(ctx).edit().putString("active_project_id", project.id).apply()
     }
 
-    // ---------- Importation & Recadrage d'images (centerCrop) ----------
+    // ---------- Configuration Globale ----------
+
+    fun loadAppConfig(ctx: Context): AppConfig {
+        val p = prefs(ctx)
+        return AppConfig(
+            appWallpaperFileName = p.getString("cfg_app_wallpaper", null),
+            appWallpaperBlur = p.getInt("cfg_app_blur", 10),
+            appWallpaperOpacity = p.getInt("cfg_app_opacity", 65),
+            securityPinEnabled = p.getBoolean("cfg_security_enabled", false),
+            securityPin = p.getString("cfg_security_pin", "1234") ?: "1234",
+            exportQuality = p.getString("cfg_export_quality", "high") ?: "high"
+        )
+    }
+
+    fun saveAppConfig(ctx: Context, config: AppConfig) {
+        prefs(ctx).edit()
+            .putString("cfg_app_wallpaper", config.appWallpaperFileName)
+            .putInt("cfg_app_blur", config.appWallpaperBlur)
+            .putInt("cfg_app_opacity", config.appWallpaperOpacity)
+            .putBoolean("cfg_security_enabled", config.securityPinEnabled)
+            .putString("cfg_security_pin", config.securityPin)
+            .putString("cfg_export_quality", config.exportQuality)
+            .apply()
+    }
+
+    // ---------- Importation & Recadrage (CenterCrop) ----------
 
     fun importImage(ctx: Context, uri: Uri): SlideItem? {
         val d = slidesDir(ctx)
@@ -222,8 +153,7 @@ object Slides {
             )?.use { c ->
                 if (c.moveToFirst()) return c.getString(0)
             }
-        } catch (e: Exception) {
-        }
+        } catch (e: Exception) {}
         return uri.lastPathSegment
     }
 
@@ -248,22 +178,31 @@ object Slides {
         }
     }
 
-    // ---------- Traitement d'image & Filtres (Luminosité, Contraste, Saturation) ----------
+    // ---------- Traitement d'Image : Zoom, Pan & ColorMatrix Filters ----------
 
-    fun processFilteredBitmap(baseBitmap: Bitmap, slide: SlideItem): Bitmap {
-        val result = Bitmap.createBitmap(baseBitmap.width, baseBitmap.height, Bitmap.Config.ARGB_8888)
+    fun processFilteredBitmap(baseBitmap: Bitmap, adjustments: ImageAdjustments): Bitmap {
+        val w = baseBitmap.width
+        val h = baseBitmap.height
+        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(result)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+        // Fond d'écran coloré derrière
+        try {
+            canvas.drawColor(Color.parseColor(adjustments.bgColor))
+        } catch (e: Exception) {
+            canvas.drawColor(Color.BLACK)
+        }
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         val cm = ColorMatrix()
 
-        // Saturation (0 to 2)
+        // 1. Saturation
         val satMatrix = ColorMatrix()
-        satMatrix.setSaturation(slide.saturation / 100f)
+        satMatrix.setSaturation(adjustments.saturation / 100f)
 
-        // Contraste & Luminosité
-        val scale = slide.contrast / 100f
-        val translate = (slide.brightness - 100) * 1.28f
+        // 2. Contraste & Luminosité
+        val scale = adjustments.contrast / 100f
+        val translate = (adjustments.brightness - 100) * 1.28f
         val contrastMatrix = ColorMatrix(
             floatArrayOf(
                 scale, 0f, 0f, 0f, translate,
@@ -277,11 +216,17 @@ object Slides {
         cm.postConcat(contrastMatrix)
         paint.colorFilter = ColorMatrixColorFilter(cm)
 
-        canvas.drawBitmap(baseBitmap, 0f, 0f, paint)
+        // Transformation Matrix (Zoom & Pan)
+        val matrix = Matrix()
+        val z = adjustments.zoom
+        matrix.postScale(z, z, w / 2f, h / 2f)
+        matrix.postTranslate(adjustments.panX, adjustments.panY)
+
+        canvas.drawBitmap(baseBitmap, matrix, paint)
         return result
     }
 
-    // ---------- Application du vrai fond d'écran Android ----------
+    // ---------- Application du Fond d'Écran Android Réel ----------
 
     fun applyNext(ctx: Context): Boolean {
         val project = getActiveProject(ctx)
@@ -294,9 +239,9 @@ object Slides {
         if (!file.exists()) return false
 
         val baseBitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return false
-        val finalBitmap = processFilteredBitmap(baseBitmap, currentSlide)
+        val finalBitmap = processFilteredBitmap(baseBitmap, currentSlide.adjustments)
 
-        val flag = when (project.target) {
+        val flag = when (project.globalTarget) {
             0 -> WallpaperManager.FLAG_SYSTEM
             1 -> WallpaperManager.FLAG_LOCK
             else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
@@ -304,7 +249,7 @@ object Slides {
 
         try {
             WallpaperManager.getInstance(ctx).setBitmap(finalBitmap, null, true, flag)
-            // Sauvegarder l'état
+            // Mise à jour de l'index dans les projets
             val projects = loadProjects(ctx)
             val pIdx = projects.indexOfFirst { it.id == project.id }
             if (pIdx >= 0) {
@@ -318,23 +263,24 @@ object Slides {
         }
     }
 
-    // ---------- Fond d'écran interne de l'Application elle-même ----------
+    // ---------- Arrière-Plan Interne de l'Application ----------
 
-    fun setAppWallpaperPath(ctx: Context, path: String?) {
-        prefs(ctx).edit().putString("app_wallpaper_path", path).apply()
-    }
-
-    fun getAppWallpaperPath(ctx: Context): String? {
-        return prefs(ctx).getString("app_wallpaper_path", null)
+    fun setAppWallpaper(ctx: Context, fileName: String?) {
+        val config = loadAppConfig(ctx)
+        config.appWallpaperFileName = fileName
+        saveAppConfig(ctx, config)
     }
 
     fun applyAppWallpaper(view: View, ctx: Context) {
-        val path = getAppWallpaperPath(ctx) ?: return
-        val file = File(path)
+        val config = loadAppConfig(ctx)
+        val fileName = config.appWallpaperFileName ?: return
+        val file = File(slidesDir(ctx), fileName)
         if (file.exists()) {
             val bmp = BitmapFactory.decodeFile(file.absolutePath)
             if (bmp != null) {
-                view.background = BitmapDrawable(ctx.resources, bmp)
+                view.background = BitmapDrawable(ctx.resources, bmp).apply {
+                    alpha = ((config.appWallpaperOpacity / 100f) * 255).toInt()
+                }
             }
         }
     }
