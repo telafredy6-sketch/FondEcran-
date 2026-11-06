@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.service.wallpaper.WallpaperService
 import android.view.SurfaceHolder
+import java.io.File
 
 class LiveWallpaperService : WallpaperService() {
 
@@ -17,11 +18,12 @@ class LiveWallpaperService : WallpaperService() {
     inner class SlideEngine : Engine() {
         private val handler = Handler(Looper.getMainLooper())
         private var player: MediaPlayer? = null
-        private var musicStamp = 0L
         private var bmp: Bitmap? = null
+        private var currentFile: File? = null
         private var index = 0
         private var w = 0
         private var h = 0
+        private var isShown = false
 
         private val tick = object : Runnable {
             override fun run() {
@@ -37,12 +39,16 @@ class LiveWallpaperService : WallpaperService() {
             val list = Slides.files(applicationContext)
             if (list.isEmpty()) {
                 bmp = null
+                currentFile = null
             } else {
                 index %= list.size
+                currentFile = list[index]
                 bmp = BitmapFactory.decodeFile(list[index].absolutePath)
                 index++
             }
             draw()
+            prepareMusic()
+            if (isShown) playMusic()
         }
 
         private fun draw() {
@@ -61,24 +67,30 @@ class LiveWallpaperService : WallpaperService() {
             }
         }
 
-        private fun startMusic() {
+        /** Prépare la musique associée à l'image affichée. */
+        private fun prepareMusic() {
+            player?.release()
+            player = null
+            val img = currentFile ?: return
             if (!Slides.prefs(applicationContext).getBoolean("music_on", true)) return
-            val f = Slides.musicFile(applicationContext)
-            if (!f.exists()) return
+            val m = Slides.musicOf(applicationContext, img)
+            if (!m.exists()) return
             try {
-                if (player == null || musicStamp != f.lastModified()) {
-                    player?.release()
-                    musicStamp = f.lastModified()
-                    player = MediaPlayer().apply {
-                        setDataSource(f.absolutePath)
-                        isLooping = true
-                        prepare()
-                    }
+                player = MediaPlayer().apply {
+                    setDataSource(m.absolutePath)
+                    isLooping = true
+                    prepare()
                 }
-                player?.start()
             } catch (e: Exception) {
                 player?.release()
                 player = null
+            }
+        }
+
+        private fun playMusic() {
+            try {
+                player?.start()
+            } catch (e: Exception) {
             }
         }
 
@@ -97,11 +109,13 @@ class LiveWallpaperService : WallpaperService() {
         }
 
         override fun onVisibilityChanged(visible: Boolean) {
+            isShown = visible
             handler.removeCallbacks(tick)
             if (visible) {
                 if (bmp == null) nextImage() else draw()
+                if (player == null) prepareMusic()
+                playMusic()
                 handler.postDelayed(tick, intervalMs())
-                startMusic()
             } else {
                 pauseMusic()
             }
