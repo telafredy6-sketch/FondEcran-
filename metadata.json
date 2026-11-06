@@ -1,0 +1,9 @@
+{
+  "name": "Fond d'écran - Diaporama & Musique",
+  "description": "Application de diaporama de fonds d'écran avec musique associée par image, recherche Pinterest et mode fond animé.",
+  "prompt": "Application de gestion de fonds d'écran et diaporamas animés avec musique",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
