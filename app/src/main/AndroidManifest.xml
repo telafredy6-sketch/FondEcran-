@@ -8,6 +8,7 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@drawable/logo"
         android:label="Fond d'écran"
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
 
