@@ -2,7 +2,10 @@ package com.fredy.fondecran
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Rect
 import android.media.MediaPlayer
 import android.os.Handler
@@ -19,32 +22,35 @@ class LiveWallpaperService : WallpaperService() {
         private val handler = Handler(Looper.getMainLooper())
         private var player: MediaPlayer? = null
         private var bmp: Bitmap? = null
-        private var currentFile: File? = null
-        private var index = 0
+        private var currentSlide: SlideItem? = null
+        private var isShown = false
         private var w = 0
         private var h = 0
-        private var isShown = false
 
         private val tick = object : Runnable {
             override fun run() {
                 nextImage()
-                handler.postDelayed(this, intervalMs())
+                val delay = (currentSlide?.durationSec ?: 15) * 1000L
+                handler.postDelayed(this, delay)
             }
         }
 
-        private fun intervalMs(): Long =
-            Slides.prefs(applicationContext).getInt("interval_min", 15) * 60_000L
-
         private fun nextImage() {
-            val list = Slides.files(applicationContext)
+            val project = Slides.getActiveProject(applicationContext)
+            val list = project.slides
             if (list.isEmpty()) {
                 bmp = null
-                currentFile = null
+                currentSlide = null
             } else {
-                index %= list.size
-                currentFile = list[index]
-                bmp = BitmapFactory.decodeFile(list[index].absolutePath)
-                index++
+                project.currentSlideIndex = (project.currentSlideIndex + 1) % list.size
+                currentSlide = list[project.currentSlideIndex]
+                val f = File(Slides.slidesDir(applicationContext), currentSlide!!.fileName)
+                if (f.exists()) {
+                    val raw = BitmapFactory.decodeFile(f.absolutePath)
+                    bmp = if (raw != null) Slides.processFilteredBitmap(raw, currentSlide!!) else null
+                } else {
+                    bmp = null
+                }
             }
             draw()
             prepareMusic()
@@ -59,27 +65,54 @@ class LiveWallpaperService : WallpaperService() {
             } catch (e: Exception) {
                 null
             } ?: return
+
             try {
                 canvas.drawColor(Color.BLACK)
-                bmp?.let { canvas.drawBitmap(it, null, Rect(0, 0, w, h), null) }
+                val currentBmp = bmp
+                if (currentBmp != null) {
+                    val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                    val slide = currentSlide
+                    val zoom = slide?.zoom ?: 1.0f
+                    val panX = slide?.panX ?: 0f
+                    val panY = slide?.panY ?: 0f
+
+                    val matrix = Matrix()
+                    // Calcul d'échelle pour remplir l'écran (CENTER_CROP)
+                    val scale = maxOf(w.toFloat() / currentBmp.width, h.toFloat() / currentBmp.height) * zoom
+                    val dx = (w - currentBmp.width * scale) / 2f + panX
+                    val dy = (h - currentBmp.height * scale) / 2f + panY
+                    matrix.postScale(scale, scale)
+                    matrix.postTranslate(dx, dy)
+
+                    canvas.drawBitmap(currentBmp, matrix, paint)
+                }
             } finally {
                 holder.unlockCanvasAndPost(canvas)
             }
         }
 
-        /** Prépare la musique associée à l'image affichée. */
+        /** Prépare la musique associée à la diapositive active */
         private fun prepareMusic() {
             player?.release()
             player = null
-            val img = currentFile ?: return
-            if (!Slides.prefs(applicationContext).getBoolean("music_on", true)) return
-            val m = Slides.musicOf(applicationContext, img)
-            if (!m.exists()) return
+
+            val slide = currentSlide ?: return
+            val audioName = slide.audioFileName ?: return
+            val audioFile = File(Slides.audioDir(applicationContext), audioName)
+            if (!audioFile.exists()) return
+
+            val musicOn = Slides.prefs(applicationContext).getBoolean("music_on", true)
+            if (!musicOn) return
+
             try {
                 player = MediaPlayer().apply {
-                    setDataSource(m.absolutePath)
+                    setDataSource(audioFile.absolutePath)
+                    setVolume(slide.audioVolume, slide.audioVolume)
                     isLooping = true
                     prepare()
+                    if (slide.audioStartMs > 0) {
+                        seekTo(slide.audioStartMs)
+                    }
                 }
             } catch (e: Exception) {
                 player?.release()
@@ -115,7 +148,8 @@ class LiveWallpaperService : WallpaperService() {
                 if (bmp == null) nextImage() else draw()
                 if (player == null) prepareMusic()
                 playMusic()
-                handler.postDelayed(tick, intervalMs())
+                val delay = (currentSlide?.durationSec ?: 15) * 1000L
+                handler.postDelayed(tick, delay)
             } else {
                 pauseMusic()
             }

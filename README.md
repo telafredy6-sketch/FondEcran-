@@ -1,29 +1,40 @@
-# Fond d'écran - Diaporama & Musique (React)
+# Fond d'écran - Diaporama & Musique
 
-Application complète de diaporama et fond d'écran animé réécrite en React + TypeScript + Tailwind CSS.
+Application Android native complète (Kotlin) et application web interactive (React + TypeScript).
 
-## Fonctionnalités
+## Architecture Android (Kotlin)
 
-1. **Recherche de fonds d'écran Pinterest** :
-   - Recherche directe et suggestions thématiques (nature, océan, anime).
-   - Instructions étape par étape pour télécharger et importer les fonds d'écran.
+1. **Architecture Multi-Écrans (`MainActivity.kt`)** :
+   - **Page Accueil (`HOME`)** :
+     - Liste de vos diaporamas et images uniques sauvegardés en persistance JSON locale.
+     - Bouton « + Nouveau Diaporama / Fond » avec dialogue de choix du mode (Diaporama ou Image Unique).
+     - Raccourcis directs vers les Sons Système, Paramètres, et Recherche Pinterest.
+   - **Page Édition du Diaporama / Image Unique (`PROJECT_EDIT`)** :
+     - Liste ordonnée des images avec miniatures.
+     - **Durée par image (individuelle)** : sélecteur de temps par diapositive (5s, 10s, 15s, 30s, 1 min, 5 min, 15 min, 1 h).
+     - **Son individuel** : association et découpe audio par image.
+     - Boutons d'action pour modifier, déplacer, recadrer et supprimer.
+     - Paramètres de cible : Écran d'accueil, Écran de verrouillage ou les deux.
+     - Lancement du diaporama périodique (`WorkManager`) et application immédiate.
+   - **Page Éditeur d'Image (`IMAGE_EDITOR`)** :
+     - Ajustements en temps réel via `ColorMatrix` : Luminosité, Contraste, Saturation.
+     - Filtres prédéfinis 1-clic : Normal, Vif, N&B, Rétro.
+     - Possibilité d'appliquer l'image comme fond d'écran interne de l'application elle-même.
+   - **Page Éditeur de Son (`AUDIO_EDITOR`)** :
+     - Importation de fichiers audio (`audio/*`).
+     - Découpage précis du point de début (`audioStartMs`) et réglage du volume sonore.
+     - Pré-écoute instantanée en boucle avec `MediaPlayer`.
+   - **Page Sons Système (`SYSTEM_SOUNDS`)** :
+     - Écoute et prévisualisation des sonneries d'appel, notifications et alertes d'alarme système.
+   - **Page Paramètres (`SETTINGS`)** :
+     - Gestion du fond d'écran de l'application (activer/réinitialiser).
+     - Protection sécurisée au démarrage (Code PIN / Empreinte digitale `KeyguardManager`).
 
-2. **Gestion et Import des Images** :
-   - Importation multiple avec recadrage automatique au format smartphone (center-crop).
-   - Prévisualisation interactive et fonds d'écran préconfigurés.
+2. **Fond d'Écran Animé Android (`LiveWallpaperService.kt`)** :
+   - `SlideEngine` sur `SurfaceHolder` avec rendu canvas filtré.
+   - Respect scrupuleux de la durée individuelle de chaque image (`slide.durationSec * 1000L`).
+   - Lecture sonore synchronisée et découpée en boucle (`MediaPlayer.seekTo(slide.audioStartMs)`).
+   - Gestion des pauses et reprises en arrière-plan (`onVisibilityChanged`).
 
-3. **Musique par Image** :
-   - Association d'un titre musical ou ambiance sonore relaxante à chaque fond d'écran.
-   - Support des fichiers audio personnalisés (MP3, WAV, OGG) et ambiances sonores procédurales intégrées.
-
-4. **Options du Diaporama** :
-   - Cibles : Écran d'accueil, Écran de verrouillage, ou les deux.
-   - Intervalles : 15 min, 30 min, 1 h, 6 h (avec mode démo rapide en secondes).
-   - Démarrer, arrêter ou appliquer immédiatement l'image suivante.
-
-5. **Fond d'écran animé immersif (Live Wallpaper)** :
-   - Simulation fidèle du service Android Live Wallpaper avec rendu plein écran ou cadre smartphone réaliste.
-   - Heure et date en direct, widget météo/musique, lecture sonore en boucle synchronisée, contrôle du volume et téléchargement.
-
-6. **Sécurité et Authentification** :
-   - Protection de l'application par code PIN ou empreinte digitale simulée.
+3. **Tâches d'Arrière-Plan (`SlideWorker.kt`)** :
+   - `PeriodicWorkRequest` géré par `WorkManager` pour alterner les fonds d'écran selon l'intervalle configuré.
