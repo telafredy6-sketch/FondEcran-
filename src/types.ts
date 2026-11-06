@@ -82,6 +82,14 @@ export interface SystemSound {
   durationLabel: string;
 }
 
+export interface AssignedSystemSound {
+  name: string;
+  url?: string;
+  type: 'custom' | 'synth' | 'system';
+  synthPreset?: 'call1' | 'chime' | 'alarmWake' | 'ping' | 'marimba';
+  fileName?: string;
+}
+
 export interface AppConfig {
   appWallpaperUrl: string | null;
   appWallpaperBlur: number; // 0 to 20
@@ -89,4 +97,7 @@ export interface AppConfig {
   securityPinEnabled: boolean;
   securityPin: string;
   exportQuality: 'high' | 'standard';
+  assignedRingtone: AssignedSystemSound;
+  assignedNotification: AssignedSystemSound;
+  assignedAlarm: AssignedSystemSound;
 }
